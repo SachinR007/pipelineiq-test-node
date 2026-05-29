@@ -1,0 +1,189 @@
+name: PipelineIQ DevSecOps
+
+
+
+on:
+
+  push:
+
+    branches: [main, master]
+
+  pull_request:
+
+    branches: [main, master]
+
+
+
+permissions:
+
+  contents: read
+
+  security-events: write
+
+  actions: read
+
+
+
+env:
+
+  CI: true
+
+
+
+jobs:
+
+  # Suggested from AI: Install Dependencies
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PIPELINEIQ_STAGE_SOURCE: ai-suggested
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: |
+          npm ci || npm install
+
+  # Suggested from AI: Unit & Integration Tests
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [install]
+    env:
+      PIPELINEIQ_STAGE_SOURCE: ai-suggested
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: |
+          npm test -- --runInBand
+
+  sast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade semgrep
+      - run: |
+          semgrep scan --config auto --sarif --output semgrep.sarif || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semgrep
+          path: semgrep.sarif
+          if-no-files-found: ignore
+
+  filesystem-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs
+          path: trivy-fs.sarif
+          if-no-files-found: ignore
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+
+  # Suggested from AI: Dependency Vulnerability Audit
+  dep-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install]
+    continue-on-error: true
+    env:
+      PIPELINEIQ_STAGE_SOURCE: ai-suggested
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: |
+          npm audit --audit-level=high || true
+
+  # Suggested from AI: Code Linting
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [install]
+    continue-on-error: true
+    env:
+      PIPELINEIQ_STAGE_SOURCE: ai-suggested
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npm run lint || true
+
+  # Suggested from AI: Code Coverage
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install]
+    continue-on-error: true
+    env:
+      PIPELINEIQ_STAGE_SOURCE: ai-suggested
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npm test -- --coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage/lcov-info
+          path: coverage/lcov.info
+          if-no-files-found: ignore
+
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test, sast, filesystem-scan, secrets-scan, dep-audit]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "Repository: SachinR007/pipelineiq-test-node"
+      - run: |
+          echo "Test result: ${{ needs.test.result }}"
+      - run: |
+          test "${{ needs.test.result }}" = "success"
+
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [quality-gate]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "PipelineIQ workflow completed with ${{ needs.quality-gate.result }}"
